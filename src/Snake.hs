@@ -13,15 +13,19 @@ import Data.Maybe (fromMaybe)
 import Data.Functor (($>))
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Fix (MonadFix)
+import Control.Monad (forever, void)
 
 import Data.Sequence (Seq, ViewL(..), ViewR(..), (<|))
 import qualified Data.Sequence as S
 import Lens.Micro.TH (makeLenses)
 import Lens.Micro ((&), (.~), (%~), (^.))
 import Linear.V2 (V2(..), _x, _y)
-import System.Random (newStdGen, randomRs)
+import System.Random (newStdGen, randomRs, randomRIO)
+
+import Control.Concurrent (threadDelay, forkIO)
 
 import qualified Reflex as R
+import qualified Reflex.Host.App as RH
 
 -- General Utility
 
@@ -113,7 +117,11 @@ initialSnake = S.singleton (V2 10 10)
 
 gameNetwork
   :: forall t m
-   . (t ~ R.SpiderTimeline R.Global, MonadFix m, R.MonadHold t m, MonadIO m)
+   . ( t ~ R.SpiderTimeline R.Global
+     , MonadFix m
+     , R.MonadHold t m
+     , RH.MonadAppHost t m
+     )
   => R.Event t ()
   -> R.Event t Direction
   -> R.Event t ()
@@ -157,10 +165,16 @@ gameNetwork restartEvent directionEvent tickEvent = mdo
   foodNetwork startEvent snakeDyn = do
     let genNewFoodM fs = R.sample (R.current snakeDyn) <&> genNewFood fs
         genNewFood fs snake = dropWhile (`elem`snake) fs
+    (foodDecayEvent, decayT) <- RH.newExternalEvent
+    _                        <- RH.performPostBuild $ do
+      void $ liftIO $ forkIO $ forever $ do
+        _ <- decayT ()
+        threadDelay =<< randomRIO (3000000, 10000000)
     let foodChange = R.leftmost
           [ startEvent $> \fs -> genNewFoodM fs
           , restartEvent $> \fs -> genNewFoodM fs
           , R.updated snakeDyn <&> \snake fs -> pure (genNewFood fs snake)
+          , foodDecayEvent $> \fs -> genNewFoodM $ tail fs
           ]
     infiniteFoodSupply <- liftIO
       [ zipWith V2 x y

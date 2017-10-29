@@ -7,7 +7,7 @@
 
 module UI (main) where
 
-import Control.Monad (forever, void, (>=>))
+import Control.Monad (forever, void)
 import Control.Monad.IO.Class (liftIO)
 import Control.Concurrent (threadDelay, forkIO)
 import Data.Maybe (fromMaybe)
