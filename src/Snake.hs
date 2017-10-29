@@ -18,13 +18,13 @@ import System.Random (randomRIO)
 -- Types
 
 data Game = Game
-  { _snake  :: Snake     -- ^ snake as a sequence of points in R2
-  , _dir    :: Direction -- ^ direction
-  , _food   :: Coord     -- ^ location of the food
-  , _dead   :: Bool      -- ^ game over flag
-  , _paused :: Bool      -- ^ paused flag
-  , _score  :: Int       -- ^ score
-  , _frozen :: Bool      -- ^ freeze to disallow duplicate turns between time steps
+  { _snake   :: Snake     -- ^ snake as a sequence of points in R2
+  , _lastdir :: Direction -- ^ direction
+  , _nextdir :: Direction
+  , _food    :: Coord     -- ^ location of the food
+  , _dead    :: Bool      -- ^ game over flag
+  , _paused  :: Bool      -- ^ paused flag
+  , _score   :: Int       -- ^ score
   } deriving (Eq, Show)
 
 type Coord = V2 Int
@@ -52,8 +52,7 @@ width = 20
 step :: Game -> IO Game
 step g = fromMaybe (return g) $ do
   guard (not $ g ^. paused || g ^. dead)
-  let g' = g & frozen .~ False
-  die g' <|> eatFood g' <|> move g'
+  die g <|> eatFood g <|> move g
 
 -- | Possibly die if next head position is disallowed
 die :: Monad m => Game -> Maybe (m Game)
@@ -74,7 +73,8 @@ eatFood g =
 
 -- | Move snake along in a marquee fashion
 move :: Monad m => Game -> Maybe (m Game)
-move g = Just $ return $ g & snake %~ (mv . S.viewr)
+move g =
+  Just $ return $ g & snake %~ (mv . S.viewr) & lastdir .~ (g ^. nextdir)
  where
   mv (EmptyR) = error "Snakes can't be empty!"
   mv (s:>_  ) = nextHead g <| s
@@ -84,7 +84,7 @@ nextHead :: Game -> Coord
 nextHead g = go $ S.viewl (g ^. snake) -- nextHead (g ^. dir) (g ^. snake)
  where
   go (EmptyL) = error "Snakes can't be empty!"
-  go (a:<_  ) = case g ^. dir of
+  go (a:<_  ) = case g ^. nextdir of
     North -> a & _y %~ (+1)
     South -> a & _y %~ (subtract 1)
     East  -> a & _x %~ (+1)
@@ -95,13 +95,13 @@ nextHead g = go $ S.viewl (g ^. snake) -- nextHead (g ^. dir) (g ^. snake)
 --
 -- Implicitly unpauses yet freezes game
 turn :: Direction -> Game -> Game
-turn d g = if g ^. frozen
-  then g
-  else g & dir %~ (turnDir d) & paused .~ False & frozen .~ True
+turn d g = case turnDir d (g ^. lastdir) of
+  Nothing     -> g & paused .~ False
+  Just newdir -> g & nextdir .~ newdir & paused .~ False
 
-turnDir :: Direction -> Direction -> Direction
-turnDir n c | n == opposite c = c
-            | otherwise       = n
+turnDir :: Direction -> Direction -> Maybe Direction
+turnDir n c | n == opposite c = Nothing
+            | otherwise       = Just n
  where
   opposite North = South
   opposite South = North
@@ -126,13 +126,13 @@ randomCoord = V2 <$> randomRIO (1, width) <*> randomRIO (1, height)
 initGame :: IO Game
 initGame = do
   let g = Game
-        { _snake  = (S.singleton (V2 10 10))
-        , _dir    = NoDir
-        , _food   = (V2 0 0)
-        , _score  = 0
-        , _dead   = False
-        , _paused = True
-        , _frozen = False
+        { _snake   = (S.singleton (V2 10 10))
+        , _lastdir = NoDir
+        , _nextdir = NoDir
+        , _food    = (V2 0 0)
+        , _score   = 0
+        , _dead    = False
+        , _paused  = True
         }
   nf <- nextFood g
   return $ g & food .~ nf
