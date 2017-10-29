@@ -57,7 +57,7 @@ app = App { appDraw = drawUI
 main :: IO ()
 main = do
   chan <- newBChan 10
-  forkIO $ forever $ do
+  _ <- forkIO $ forever $ do
     writeBChan chan Tick
     threadDelay 100000 -- decides how fast your game moves
   g <- initGame
@@ -75,7 +75,7 @@ handleEvent g (VtyEvent (V.EvKey (V.KChar 'k') [])) = continue $ turn North g
 handleEvent g (VtyEvent (V.EvKey (V.KChar 'j') [])) = continue $ turn South g
 handleEvent g (VtyEvent (V.EvKey (V.KChar 'l') [])) = continue $ turn East g
 handleEvent g (VtyEvent (V.EvKey (V.KChar 'h') [])) = continue $ turn West g
-handleEvent g (VtyEvent (V.EvKey (V.KChar 'r') [])) = liftIO (initGame) >>= continue
+handleEvent _ (VtyEvent (V.EvKey (V.KChar 'r') [])) = liftIO (initGame) >>= continue
 handleEvent g (VtyEvent (V.EvKey (V.KChar 'q') [])) = halt g
 handleEvent g (VtyEvent (V.EvKey V.KEsc []))        = halt g
 handleEvent g _                                     = continue g
@@ -100,8 +100,8 @@ drawScore n = withBorderStyle BS.unicodeBold
   $ str $ show n
 
 drawGameOver :: Bool -> Widget Name
-drawGameOver dead =
-  if dead
+drawGameOver isDead =
+  if isDead
      then withAttr gameOverAttr $ C.hCenter $ str "GAME OVER"
      else emptyWidget
 

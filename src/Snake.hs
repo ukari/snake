@@ -87,10 +87,11 @@ nextHead :: Direction -> Snake -> Coord
 nextHead d = go . S.viewl
  where
   go (EmptyL) = error "Snakes can't be empty!"
-  go (a:<_) | d == North = a & _y %~ (+1)
-            | d == South = a & _y %~ (subtract 1)
-            | d == East  = a & _x %~ (+1)
-            | d == West  = a & _x %~ (subtract 1)
+  go (a:<_  ) = case d of
+    North -> a & _y %~ (+1)
+    South -> a & _y %~ (subtract 1)
+    East  -> a & _x %~ (+1)
+    West  -> a & _x %~ (subtract 1)
 
 -- | Turn game direction (only turns orthogonally)
 --
