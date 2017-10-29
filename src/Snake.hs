@@ -1,4 +1,7 @@
-{-# LANGUAGE TemplateHaskell, FlexibleContexts #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE MonadComprehensions #-}
+
 module Snake where
 
 import Control.Applicative ((<|>))
@@ -53,21 +56,24 @@ step g = fromMaybe (return g) $ do
 
 -- | Possibly die if next head position is disallowed
 die :: Game -> Maybe (IO Game)
-die g = (bodyHit || borderHit) `thenJust` (return $ g & dead .~ True)
+die g = [ return $ g & dead .~ True | bodyHit || borderHit ]
  where
   bodyHit   = nh g `elem` g ^. snake
   borderHit = outOfBounds (nh g)
 
 -- | Possibly eat food if next head position is food
 eatFood :: Game -> Maybe (IO Game)
-eatFood g = (nh g == g ^. food) `thenJust` do
-  let ng = g & score %~ (+10) & snake %~ (nh g<|)
-  nf <- nextFood ng
-  return $ ng & food .~ nf
+eatFood g =
+  [ do
+      let ng = g & score %~ (+10) & snake %~ (nh g<|)
+      nf <- nextFood ng
+      return $ ng & food .~ nf
+  | nh g == g ^. food
+  ]
 
 -- | Move snake along in a marquee fashion
 move :: Game -> Maybe (IO Game)
-move g = Just . return $ g & snake %~ (mv . S.viewr)
+move g = Just $ return $ g & snake %~ (mv . S.viewr)
  where
   mv (EmptyR) = error "Snakes can't be empty!"
   mv (s:>_  ) = nh g <| s
@@ -95,9 +101,13 @@ turn d g = if g ^. frozen
   else g & dir %~ (turnDir d) & paused .~ False & frozen .~ True
 
 turnDir :: Direction -> Direction -> Direction
-turnDir n c | c `elem` [North, South] && n `elem` [East, West] = n
-            | c `elem` [East, West] && n `elem` [North, South] = n
-            | otherwise = c
+turnDir n c | n == opposite c = c
+            | otherwise       = n
+ where
+  opposite North = South
+  opposite South = North
+  opposite East  = West
+  opposite West  = East
 
 outOfBounds :: Coord -> Bool
 outOfBounds c = any (<1) c || c ^. _x > width || c ^. _y > height
@@ -106,6 +116,7 @@ outOfBounds c = any (<1) c || c ^. _x > width || c ^. _y > height
 nextFood :: Game -> IO Coord
 nextFood g = do
   c <- randomCoord
+  -- this will livelock if snake fills screen.
   if (c `elem` g ^. snake) then nextFood g else return c
 
 randomCoord :: IO Coord
@@ -126,8 +137,3 @@ initGame = do
   nf <- nextFood g
   return $ g & food .~ nf
 
--- Utilities
-
-thenJust :: Bool -> a -> Maybe a
-thenJust True  = Just
-thenJust False = const Nothing
