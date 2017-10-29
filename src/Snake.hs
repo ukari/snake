@@ -17,10 +17,6 @@ import System.Random (randomRIO)
 
 -- Types
 
-data Game = Game
-  { _snake   :: Snake     -- ^ snake as a sequence of points in R2
-  } deriving (Eq, Show)
-
 type Coord = V2 Int
 type Snake = Seq Coord
 
@@ -32,8 +28,6 @@ data Direction
   | NoDir
   deriving (Eq, Show)
 
-makeLenses ''Game
-
 -- Constants
 
 height, width :: Int
@@ -43,41 +37,30 @@ width = 20
 -- Functions
 
 -- | Step forward in time
-step :: Direction -> Coord -> Game -> IO Game
-step nextDir food g = fromMaybe (return g) $ do
-  eatFood nextDir food g <|> move nextDir g
-
-snakeDiesOnMove :: Direction -> Game -> Bool
-snakeDiesOnMove nextDir g = bodyHit || borderHit
+eatOrMove :: Direction -> Coord -> Snake -> Snake
+eatOrMove nextDir food snake = snakeHead <| snakeTail
  where
-  bodyHit   = (nextDir /= NoDir) && (nextHead nextDir g `elem` g ^. snake)
-  borderHit = outOfBounds (nextHead nextDir g)
+  snakeHead = nextHead nextDir snake
+  snakeTail = if nextHead nextDir snake == food
+    then snake
+    else case S.viewr snake of
+      EmptyR -> error "Snakes can't be empty!"
+      s:>_   -> s
 
-getSnakeHead :: Game -> Coord
-getSnakeHead g = case S.viewl (g ^. snake) of
+snakeDiesOnMove :: Direction -> Snake -> Bool
+snakeDiesOnMove nextDir snake = bodyHit || borderHit
+ where
+  bodyHit   = (nextDir /= NoDir) && (nextHead nextDir snake `elem` snake)
+  borderHit = outOfBounds (nextHead nextDir snake)
+
+getSnakeHead :: Snake -> Coord
+getSnakeHead snake = case S.viewl (snake) of
   EmptyL -> error "Snakes can't be empty!"
   s:<_   -> s
 
--- | Possibly eat food if next head position is food
-eatFood :: Direction -> Coord -> Game -> Maybe (IO Game)
-eatFood nextDir food g =
-  [ do
-      let ng = g & snake %~ (nextHead nextDir g<|)
-      return $ ng
-  | nextHead nextDir g == food
-  ]
-
--- | Move snake along in a marquee fashion
-move :: Monad m => Direction -> Game -> Maybe (m Game)
-move nextDir g =
-  Just $ return $ g & snake %~ (mv . S.viewr)
- where
-  mv (EmptyR) = error "Snakes can't be empty!"
-  mv (s:>_  ) = nextHead nextDir g <| s
-
 -- | Get next head location of the game's snake
-nextHead :: Direction -> Game -> Coord
-nextHead nextDir g = go $ S.viewl (g ^. snake)
+nextHead :: Direction -> Snake -> Coord
+nextHead nextDir snake = go $ S.viewl (snake)
  where
   go (EmptyL) = error "Snakes can't be empty!"
   go (a:<_  ) = case nextDir of
@@ -100,21 +83,6 @@ turnDir old new | new == opposite old = Nothing
 outOfBounds :: Coord -> Bool
 outOfBounds c = any (<1) c || c ^. _x > width || c ^. _y > height
 
--- | Get a valid next food coordinate
-nextFood :: Game -> IO Coord
-nextFood g = do
-  c <- randomCoord
-  -- this will livelock if snake fills screen.
-  if (c `elem` g ^. snake) then nextFood g else return c
-
-randomCoord :: IO Coord
-randomCoord = V2 <$> randomRIO (1, width) <*> randomRIO (1, height)
-
--- | Initialize a paused game with random food location
-initGame :: IO Game
-initGame = do
-  let g = Game
-        { _snake   = (S.singleton (V2 10 10))
-        } -- and no, we don't do IO here anymore.
-  return $ g
+initialSnake :: Snake
+initialSnake = S.singleton (V2 10 10)
 

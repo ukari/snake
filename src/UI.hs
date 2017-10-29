@@ -107,9 +107,8 @@ main = R.runSpiderHost $ RH.hostApp $ mdo
     $ R.mergeWith (||) [restartEvent $> True, directionEvent $> False]
 
   dead :: R.Dynamic t Bool <- R.holdDyn False $ R.leftmost
-    [ R.tag
-      (snakeDiesOnMove <$> R.current nextDirDyn <*> R.current gamestateDyn)
-      counterE
+    [ R.tag (snakeDiesOnMove <$> R.current nextDirDyn <*> R.current snakeDyn)
+            counterE
     , restartEvent $> False
     ]
 
@@ -127,12 +126,12 @@ main = R.runSpiderHost $ RH.hostApp $ mdo
       (R.current lastDirDyn)
       directionEvent
 
-  let genNewFoodM fs = R.sample (R.current gamestateDyn) <&> genNewFood fs
-      genNewFood fs g = dropWhile (`elem`g ^. snake) fs
+  let genNewFoodM fs = R.sample (R.current snakeDyn) <&> genNewFood fs
+      genNewFood fs snake = dropWhile (`elem`snake) fs
   let foodChange = R.leftmost
         [ startE $> \fs -> genNewFoodM fs
         , restartEvent $> \fs -> genNewFoodM fs
-        , R.updated gamestateDyn <&> \g fs -> pure (genNewFood fs g)
+        , R.updated snakeDyn <&> \snake fs -> pure (genNewFood fs snake)
         ]
   allTheFood :: R.Dynamic t [Coord] <- R.foldDynM id
                                                   infiniteFoodSupply
@@ -145,28 +144,27 @@ main = R.runSpiderHost $ RH.hostApp $ mdo
         , R.attachWith
           (\food g -> if getSnakeHead g == food then (+10) else id)
           (R.current foodDyn)
-          (R.updated gamestateDyn)
+          (R.updated snakeDyn)
         ]
   scoreDyn :: R.Dynamic t Int <- R.foldDyn id 0 scoreChange
 
-  let gameChangeEvent = R.mergeWith
-        (>=>)
+  let snakeChangeE :: R.Event t (Snake -> Snake) = R.mergeWith
+        (.)
         [ R.attachWith
           id
-          (   (\nextDir food () g -> liftIO $ step nextDir food g)
+          (   (\nextDir food () snake -> eatOrMove nextDir food snake)
           <$> R.current nextDirDyn
           <*> R.current foodDyn
           )
           tickE
-        , restartEvent <&> \() _ -> liftIO initGame
-        , startE <&> \() g -> pure g -- ensures we render the initial screen
+        , restartEvent <&> \() _ -> initialSnake
+        , startE $> id -- ensures we render the initial screen
         ]
 
-  gamestateDyn <- do
-    initGameVal <- liftIO $ initGame
-    R.foldDynM id initGameVal gameChangeEvent
+  snakeDyn <- R.foldDyn id initialSnake snakeChangeE
 
-  let widgetsDyn = drawUI <$> (OutputState <$> dead <*> scoreDyn <*> (_snake <$> gamestateDyn) <*> foodDyn)
+  let widgetsDyn =
+        drawUI <$> (OutputState <$> dead <*> scoreDyn <*> snakeDyn <*> foodDyn)
 
   pure ()
 
@@ -180,8 +178,7 @@ data OutputState = OutputState
   }
 
 drawUI :: OutputState -> [Widget Name]
-drawUI s =
-  [C.center $ padRight (Pad 2) (drawStats s) <+> drawGrid s]
+drawUI s = [C.center $ padRight (Pad 2) (drawStats s) <+> drawGrid s]
 
 drawStats :: OutputState -> Widget Name
 drawStats s = hLimit 11 $ vBox
@@ -209,8 +206,8 @@ drawGrid s =
   cellsInRow y = [ drawCoord (V2 x y) | x <- [1 .. width] ]
   drawCoord = drawCell . cellAt
   cellAt c | c `elem` _out_snake s = Snake
-           | c == _out_food s           = Food
-           | otherwise           = Empty
+           | c == _out_food s      = Food
+           | otherwise             = Empty
 
 drawCell :: Cell -> Widget Name
 drawCell Snake = withAttr snakeAttr cw
