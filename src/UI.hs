@@ -140,6 +140,15 @@ main = R.runSpiderHost $ RH.hostApp $ mdo
 
   let foodDyn = head <$> allTheFood
 
+  let scoreChange = R.leftmost
+        [ restartEvent $> const 0
+        , R.attachWith
+          (\food g -> if getSnakeHead g == food then (+10) else id)
+          (R.current foodDyn)
+          (R.updated gamestateDyn)
+        ]
+  scoreDyn :: R.Dynamic t Int <- R.foldDyn id 0 scoreChange
+
   let gameChangeEvent = R.mergeWith
         (>=>)
         [ R.attachWith
@@ -157,19 +166,26 @@ main = R.runSpiderHost $ RH.hostApp $ mdo
     initGameVal <- liftIO $ initGame
     R.foldDynM id initGameVal gameChangeEvent
 
-  let widgetsDyn = drawUI <$> dead <*> foodDyn <*> gamestateDyn
+  let widgetsDyn = drawUI <$> (OutputState <$> dead <*> scoreDyn <*> (_snake <$> gamestateDyn) <*> foodDyn)
 
   pure ()
 
 -- Drawing
 
-drawUI :: Bool -> Coord -> Game -> [Widget Name]
-drawUI dead food g =
-  [C.center $ padRight (Pad 2) (drawStats dead g) <+> drawGrid food g]
+data OutputState = OutputState
+  { _out_dead :: Bool
+  , _out_score :: Int
+  , _out_snake :: Seq Coord
+  , _out_food :: Coord
+  }
 
-drawStats :: Bool -> Game -> Widget Name
-drawStats dead g =
-  hLimit 11 $ vBox [drawScore (g ^. score), padTop (Pad 2) $ drawGameOver dead]
+drawUI :: OutputState -> [Widget Name]
+drawUI s =
+  [C.center $ padRight (Pad 2) (drawStats s) <+> drawGrid s]
+
+drawStats :: OutputState -> Widget Name
+drawStats s = hLimit 11 $ vBox
+  [drawScore (_out_score s), padTop (Pad 2) $ drawGameOver (_out_dead s)]
 
 drawScore :: Int -> Widget Name
 drawScore n =
@@ -185,15 +201,15 @@ drawGameOver isDead = if isDead
   then withAttr gameOverAttr $ C.hCenter $ str "GAME OVER"
   else emptyWidget
 
-drawGrid :: Coord -> Game -> Widget Name
-drawGrid food g =
+drawGrid :: OutputState -> Widget Name
+drawGrid s =
   withBorderStyle BS.unicodeBold $ B.borderWithLabel (str "Snake") $ vBox rows
  where
   rows = [ hBox $ cellsInRow r | r <- [height, height - 1 .. 1] ]
   cellsInRow y = [ drawCoord (V2 x y) | x <- [1 .. width] ]
   drawCoord = drawCell . cellAt
-  cellAt c | c `elem` g ^. snake = Snake
-           | c == food           = Food
+  cellAt c | c `elem` _out_snake s = Snake
+           | c == _out_food s           = Food
            | otherwise           = Empty
 
 drawCell :: Cell -> Widget Name

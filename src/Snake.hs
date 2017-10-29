@@ -19,7 +19,6 @@ import System.Random (randomRIO)
 
 data Game = Game
   { _snake   :: Snake     -- ^ snake as a sequence of points in R2
-  , _score   :: Int       -- ^ score
   } deriving (Eq, Show)
 
 type Coord = V2 Int
@@ -54,11 +53,16 @@ snakeDiesOnMove nextDir g = bodyHit || borderHit
   bodyHit   = (nextDir /= NoDir) && (nextHead nextDir g `elem` g ^. snake)
   borderHit = outOfBounds (nextHead nextDir g)
 
+getSnakeHead :: Game -> Coord
+getSnakeHead g = case S.viewl (g ^. snake) of
+  EmptyL -> error "Snakes can't be empty!"
+  s:<_   -> s
+
 -- | Possibly eat food if next head position is food
 eatFood :: Direction -> Coord -> Game -> Maybe (IO Game)
 eatFood nextDir food g =
   [ do
-      let ng = g & score %~ (+10) & snake %~ (nextHead nextDir g<|)
+      let ng = g & snake %~ (nextHead nextDir g<|)
       return $ ng
   | nextHead nextDir g == food
   ]
@@ -111,7 +115,6 @@ initGame :: IO Game
 initGame = do
   let g = Game
         { _snake   = (S.singleton (V2 10 10))
-        , _score   = 0
         } -- and no, we don't do IO here anymore.
   return $ g
 
