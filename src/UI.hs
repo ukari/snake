@@ -12,6 +12,8 @@ import Control.Concurrent (threadDelay, forkIO)
 import Data.Maybe (fromMaybe)
 import Data.Functor (($>))
 
+import System.Random (newStdGen, randomRs)
+
 import Snake
 
 import qualified Reflex as R
@@ -95,6 +97,12 @@ main = R.runSpiderHost $ RH.hostApp $ mdo
         V.EvKey (V.KChar 'q') [] -> Just ()
         _                        -> Nothing
 
+  infiniteFoodSupply <- liftIO
+    [ zipWith V2 x y
+    | x <- newStdGen <&> randomRs (1, width)
+    , y <- newStdGen <&> randomRs (1, height)
+    ]
+
   pause :: R.Behavior t Bool <- R.hold True
     $ R.mergeWith (||) [restartEvent $> True, directionEvent $> False]
 
@@ -119,11 +127,28 @@ main = R.runSpiderHost $ RH.hostApp $ mdo
       (R.current lastDirDyn)
       directionEvent
 
+  let genNewFoodM fs = R.sample (R.current gamestateDyn) <&> genNewFood fs
+      genNewFood fs g = dropWhile (`elem`g ^. snake) fs
+  let foodChange = R.leftmost
+        [ startE $> \fs -> genNewFoodM fs
+        , restartEvent $> \fs -> genNewFoodM fs
+        , R.updated gamestateDyn <&> \g fs -> pure (genNewFood fs g)
+        ]
+  allTheFood :: R.Dynamic t [Coord] <- R.foldDynM id
+                                                  infiniteFoodSupply
+                                                  foodChange
+
+  let foodDyn = head <$> allTheFood
+
   let gameChangeEvent = R.mergeWith
         (>=>)
-        [ R.attachWith (\nextDir () g -> liftIO $ step nextDir g)
-                       (R.current nextDirDyn)
-                       tickE
+        [ R.attachWith
+          id
+          (   (\nextDir food () g -> liftIO $ step nextDir food g)
+          <$> R.current nextDirDyn
+          <*> R.current foodDyn
+          )
+          tickE
         , restartEvent <&> \() _ -> liftIO initGame
         , startE <&> \() g -> pure g -- ensures we render the initial screen
         ]
@@ -132,14 +157,15 @@ main = R.runSpiderHost $ RH.hostApp $ mdo
     initGameVal <- liftIO $ initGame
     R.foldDynM id initGameVal gameChangeEvent
 
-  let widgetsDyn = drawUI <$> dead <*> gamestateDyn
+  let widgetsDyn = drawUI <$> dead <*> foodDyn <*> gamestateDyn
 
   pure ()
 
 -- Drawing
 
-drawUI :: Bool -> Game -> [Widget Name]
-drawUI dead g = [C.center $ padRight (Pad 2) (drawStats dead g) <+> drawGrid g]
+drawUI :: Bool -> Coord -> Game -> [Widget Name]
+drawUI dead food g =
+  [C.center $ padRight (Pad 2) (drawStats dead g) <+> drawGrid food g]
 
 drawStats :: Bool -> Game -> Widget Name
 drawStats dead g =
@@ -159,15 +185,15 @@ drawGameOver isDead = if isDead
   then withAttr gameOverAttr $ C.hCenter $ str "GAME OVER"
   else emptyWidget
 
-drawGrid :: Game -> Widget Name
-drawGrid g =
+drawGrid :: Coord -> Game -> Widget Name
+drawGrid food g =
   withBorderStyle BS.unicodeBold $ B.borderWithLabel (str "Snake") $ vBox rows
  where
   rows = [ hBox $ cellsInRow r | r <- [height, height - 1 .. 1] ]
   cellsInRow y = [ drawCoord (V2 x y) | x <- [1 .. width] ]
   drawCoord = drawCell . cellAt
   cellAt c | c `elem` g ^. snake = Snake
-           | c == g ^. food      = Food
+           | c == food           = Food
            | otherwise           = Empty
 
 drawCell :: Cell -> Widget Name

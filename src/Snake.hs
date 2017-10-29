@@ -19,7 +19,6 @@ import System.Random (randomRIO)
 
 data Game = Game
   { _snake   :: Snake     -- ^ snake as a sequence of points in R2
-  , _food    :: Coord     -- ^ location of the food
   , _score   :: Int       -- ^ score
   } deriving (Eq, Show)
 
@@ -45,9 +44,9 @@ width = 20
 -- Functions
 
 -- | Step forward in time
-step :: Direction -> Game -> IO Game
-step nextDir g = fromMaybe (return g) $ do
-  eatFood nextDir g <|> move nextDir g
+step :: Direction -> Coord -> Game -> IO Game
+step nextDir food g = fromMaybe (return g) $ do
+  eatFood nextDir food g <|> move nextDir g
 
 snakeDiesOnMove :: Direction -> Game -> Bool
 snakeDiesOnMove nextDir g = bodyHit || borderHit
@@ -56,13 +55,12 @@ snakeDiesOnMove nextDir g = bodyHit || borderHit
   borderHit = outOfBounds (nextHead nextDir g)
 
 -- | Possibly eat food if next head position is food
-eatFood :: Direction -> Game -> Maybe (IO Game)
-eatFood nextDir g =
+eatFood :: Direction -> Coord -> Game -> Maybe (IO Game)
+eatFood nextDir food g =
   [ do
       let ng = g & score %~ (+10) & snake %~ (nextHead nextDir g<|)
-      nf <- nextFood ng
-      return $ ng & food .~ nf
-  | nextHead nextDir g == g ^. food
+      return $ ng
+  | nextHead nextDir g == food
   ]
 
 -- | Move snake along in a marquee fashion
@@ -113,9 +111,7 @@ initGame :: IO Game
 initGame = do
   let g = Game
         { _snake   = (S.singleton (V2 10 10))
-        , _food    = (V2 0 0)
         , _score   = 0
-        }
-  nf <- nextFood g
-  return $ g & food .~ nf
+        } -- and no, we don't do IO here anymore.
+  return $ g
 
