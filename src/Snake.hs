@@ -35,6 +35,7 @@ data Direction
   | South
   | East
   | West
+  | NoDir
   deriving (Eq, Show)
 
 makeLenses ''Game
@@ -92,6 +93,7 @@ nextHead d = go . S.viewl
     South -> a & _y %~ (subtract 1)
     East  -> a & _x %~ (+1)
     West  -> a & _x %~ (subtract 1)
+    NoDir -> a
 
 -- | Turn game direction (only turns orthogonally)
 --
@@ -109,6 +111,7 @@ turnDir n c | n == opposite c = c
   opposite South = North
   opposite East  = West
   opposite West  = East
+  opposite NoDir = NoDir
 
 outOfBounds :: Coord -> Bool
 outOfBounds c = any (<1) c || c ^. _x > width || c ^. _y > height
@@ -128,7 +131,7 @@ initGame :: IO Game
 initGame = do
   let g = Game
         { _snake  = (S.singleton (V2 10 10))
-        , _dir    = North
+        , _dir    = NoDir
         , _food   = (V2 0 0)
         , _score  = 0
         , _dead   = False
