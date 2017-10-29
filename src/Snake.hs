@@ -56,7 +56,7 @@ step g = fromMaybe (return g) $ do
   die g' <|> eatFood g' <|> move g'
 
 -- | Possibly die if next head position is disallowed
-die :: Game -> Maybe (IO Game)
+die :: Monad m => Game -> Maybe (m Game)
 die g = [ return $ g & dead .~ True | bodyHit || borderHit ]
  where
   bodyHit   = nextHead g `elem` g ^. snake
@@ -73,7 +73,7 @@ eatFood g =
   ]
 
 -- | Move snake along in a marquee fashion
-move :: Game -> Maybe (IO Game)
+move :: Monad m => Game -> Maybe (m Game)
 move g = Just $ return $ g & snake %~ (mv . S.viewr)
  where
   mv (EmptyR) = error "Snakes can't be empty!"
