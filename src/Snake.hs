@@ -59,17 +59,17 @@ step g = fromMaybe (return g) $ do
 die :: Game -> Maybe (IO Game)
 die g = [ return $ g & dead .~ True | bodyHit || borderHit ]
  where
-  bodyHit   = nh g `elem` g ^. snake
-  borderHit = outOfBounds (nh g)
+  bodyHit   = nextHead g `elem` g ^. snake
+  borderHit = outOfBounds (nextHead g)
 
 -- | Possibly eat food if next head position is food
 eatFood :: Game -> Maybe (IO Game)
 eatFood g =
   [ do
-      let ng = g & score %~ (+10) & snake %~ (nh g<|)
+      let ng = g & score %~ (+10) & snake %~ (nextHead g<|)
       nf <- nextFood ng
       return $ ng & food .~ nf
-  | nh g == g ^. food
+  | nextHead g == g ^. food
   ]
 
 -- | Move snake along in a marquee fashion
@@ -77,18 +77,14 @@ move :: Game -> Maybe (IO Game)
 move g = Just $ return $ g & snake %~ (mv . S.viewr)
  where
   mv (EmptyR) = error "Snakes can't be empty!"
-  mv (s:>_  ) = nh g <| s
+  mv (s:>_  ) = nextHead g <| s
 
 -- | Get next head location of the game's snake
-nh :: Game -> Coord
-nh g = nextHead (g ^. dir) (g ^. snake)
-
--- | Get next head position of a snake in a particular direction
-nextHead :: Direction -> Snake -> Coord
-nextHead d = go . S.viewl
+nextHead :: Game -> Coord
+nextHead g = go $ S.viewl (g ^. snake) -- nextHead (g ^. dir) (g ^. snake)
  where
   go (EmptyL) = error "Snakes can't be empty!"
-  go (a:<_  ) = case d of
+  go (a:<_  ) = case g ^. dir of
     North -> a & _y %~ (+1)
     South -> a & _y %~ (subtract 1)
     East  -> a & _x %~ (+1)
