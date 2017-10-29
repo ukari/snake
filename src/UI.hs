@@ -83,17 +83,29 @@ main = R.runSpiderHost $ RH.hostApp $ mdo
         V.EvKey (V.KChar 'h') [] -> Just West
         _                        -> Nothing
 
-  pause :: R.Behavior t Bool <- R.hold True
-    $ R.mergeWith (||) [restartEvent $> True, directionEvent $> False]
-
   let restartEvent = R.fforMaybe eventE $ (=<<) $ \case
         V.EvKey (V.KChar 'r') [] -> Just ()
         _                        -> Nothing
 
+  let cursorDyn = pure $ const Nothing -- never show cursor
+
+  let shouldHaltE = R.fforMaybe eventE $ (=<<) $ \case
+        V.EvKey V.KEsc        [] -> Just ()
+        V.EvKey (V.KChar 'q') [] -> Just ()
+        _                        -> Nothing
+
+  pause :: R.Behavior t Bool <- R.hold True
+    $ R.mergeWith (||) [restartEvent $> True, directionEvent $> False]
+
+  dead :: R.Dynamic t Bool <- R.holdDyn False $ R.leftmost
+    [R.updated gamestateDyn <&> snakeIsDead, restartEvent $> False]
+
   let gameChangeEvent = R.mergeWith
         (>=>)
-        [ directionEvent <&> \dir g -> pure (turn dir g)
-        , R.gate (not <$> pause) counterE <&> \() g -> liftIO $ step g
+        [ R.gate (not <$> R.current dead) $ directionEvent <&> \dir g ->
+          pure (turn dir g)
+        , R.gate (not <$> ((||) <$> pause <*> R.current dead)) counterE
+          <&> \() g -> liftIO $ step g
         , restartEvent <&> \() _ -> liftIO initGame
         , startE <&> \() g -> pure g -- ensures we render the initial screen
         ]
@@ -102,25 +114,18 @@ main = R.runSpiderHost $ RH.hostApp $ mdo
     initGameVal <- liftIO $ initGame
     R.foldDynM id initGameVal gameChangeEvent
 
-  let widgetsDyn = drawUI <$> gamestateDyn
-
-  let shouldHaltE = R.fforMaybe eventE $ (=<<) $ \case
-        V.EvKey V.KEsc        [] -> Just ()
-        V.EvKey (V.KChar 'q') [] -> Just ()
-        _                        -> Nothing
-
-  let cursorDyn = pure $ const Nothing -- never show cursor
+  let widgetsDyn = drawUI <$> dead <*> gamestateDyn
 
   pure ()
 
 -- Drawing
 
-drawUI :: Game -> [Widget Name]
-drawUI g = [C.center $ padRight (Pad 2) (drawStats g) <+> drawGrid g]
+drawUI :: Bool -> Game -> [Widget Name]
+drawUI dead g = [C.center $ padRight (Pad 2) (drawStats dead g) <+> drawGrid g]
 
-drawStats :: Game -> Widget Name
-drawStats g = hLimit 11
-  $ vBox [drawScore (g ^. score), padTop (Pad 2) $ drawGameOver (g ^. dead)]
+drawStats :: Bool -> Game -> Widget Name
+drawStats dead g =
+  hLimit 11 $ vBox [drawScore (g ^. score), padTop (Pad 2) $ drawGameOver dead]
 
 drawScore :: Int -> Widget Name
 drawScore n =

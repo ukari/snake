@@ -22,7 +22,6 @@ data Game = Game
   , _lastdir :: Direction -- ^ direction
   , _nextdir :: Direction
   , _food    :: Coord     -- ^ location of the food
-  , _dead    :: Bool      -- ^ game over flag
   , _score   :: Int       -- ^ score
   } deriving (Eq, Show)
 
@@ -50,14 +49,12 @@ width = 20
 -- | Step forward in time
 step :: Game -> IO Game
 step g = fromMaybe (return g) $ do
-  guard (not $ g ^. dead)
-  die g <|> eatFood g <|> move g
+  eatFood g <|> move g
 
--- | Possibly die if next head position is disallowed
-die :: Monad m => Game -> Maybe (m Game)
-die g = [ return $ g & dead .~ True | bodyHit || borderHit ]
+snakeIsDead :: Game -> Bool
+snakeIsDead g = bodyHit || borderHit
  where
-  bodyHit   = nextHead g `elem` g ^. snake
+  bodyHit   = (g ^. nextdir /= NoDir) && (nextHead g `elem` g ^. snake)
   borderHit = outOfBounds (nextHead g)
 
 -- | Possibly eat food if next head position is food
@@ -130,7 +127,6 @@ initGame = do
         , _nextdir = NoDir
         , _food    = (V2 0 0)
         , _score   = 0
-        , _dead    = False
         }
   nf <- nextFood g
   return $ g & food .~ nf
