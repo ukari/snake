@@ -3,6 +3,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE MonadComprehensions #-}
 module UI (main) where
 
 import Control.Monad (forever, void, (>=>))
@@ -98,14 +99,31 @@ main = R.runSpiderHost $ RH.hostApp $ mdo
     $ R.mergeWith (||) [restartEvent $> True, directionEvent $> False]
 
   dead :: R.Dynamic t Bool <- R.holdDyn False $ R.leftmost
-    [R.updated gamestateDyn <&> snakeIsDead, restartEvent $> False]
+    [ R.tag
+      (snakeDiesOnMove <$> R.current nextDirDyn <*> R.current gamestateDyn)
+      counterE
+    , restartEvent $> False
+    ]
+
+  let tickE = R.attachWithMaybe
+        (\paused dying -> [ () | not (dying || paused) ])
+        pause
+        (R.tagPromptlyDyn dead counterE) -- need promptly to prevent tick
+                                         -- if dead in the same instant.
+
+  lastDirDyn <- R.holdDyn NoDir
+    $ R.leftmost [restartEvent $> NoDir, R.tag (R.current nextDirDyn) tickE]
+  nextDirDyn <-
+    R.holdDyn NoDir $ R.gate (not <$> R.current dead) $ R.attachWithMaybe
+      turnDir
+      (R.current lastDirDyn)
+      directionEvent
 
   let gameChangeEvent = R.mergeWith
         (>=>)
-        [ R.gate (not <$> R.current dead) $ directionEvent <&> \dir g ->
-          pure (turn dir g)
-        , R.gate (not <$> ((||) <$> pause <*> R.current dead)) counterE
-          <&> \() g -> liftIO $ step g
+        [ R.attachWith (\nextDir () g -> liftIO $ step nextDir g)
+                       (R.current nextDirDyn)
+                       tickE
         , restartEvent <&> \() _ -> liftIO initGame
         , startE <&> \() g -> pure g -- ensures we render the initial screen
         ]
