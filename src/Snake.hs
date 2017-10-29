@@ -23,7 +23,6 @@ data Game = Game
   , _nextdir :: Direction
   , _food    :: Coord     -- ^ location of the food
   , _dead    :: Bool      -- ^ game over flag
-  , _paused  :: Bool      -- ^ paused flag
   , _score   :: Int       -- ^ score
   } deriving (Eq, Show)
 
@@ -51,7 +50,7 @@ width = 20
 -- | Step forward in time
 step :: Game -> IO Game
 step g = fromMaybe (return g) $ do
-  guard (not $ g ^. paused || g ^. dead)
+  guard (not $ g ^. dead)
   die g <|> eatFood g <|> move g
 
 -- | Possibly die if next head position is disallowed
@@ -96,8 +95,8 @@ nextHead g = go $ S.viewl (g ^. snake) -- nextHead (g ^. dir) (g ^. snake)
 -- Implicitly unpauses yet freezes game
 turn :: Direction -> Game -> Game
 turn d g = case turnDir d (g ^. lastdir) of
-  Nothing     -> g & paused .~ False
-  Just newdir -> g & nextdir .~ newdir & paused .~ False
+  Nothing     -> g
+  Just newdir -> g & nextdir .~ newdir
 
 turnDir :: Direction -> Direction -> Maybe Direction
 turnDir n c | n == opposite c = Nothing
@@ -132,7 +131,6 @@ initGame = do
         , _food    = (V2 0 0)
         , _score   = 0
         , _dead    = False
-        , _paused  = True
         }
   nf <- nextFood g
   return $ g & food .~ nf

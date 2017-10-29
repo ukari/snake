@@ -2,12 +2,14 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE GADTs #-}
 module UI (main) where
 
 import Control.Monad (forever, void, (>=>))
 import Control.Monad.IO.Class (liftIO)
 import Control.Concurrent (threadDelay, forkIO)
 import Data.Maybe (fromMaybe)
+import Data.Functor (($>))
 
 import Snake
 
@@ -49,7 +51,8 @@ data Cell = Snake | Food | Empty
 (<&>) :: Functor f => f a -> (a -> b) -> f b
 (<&>) = flip fmap
 
-main :: IO ()
+-- this forall is just a trick to "declare" 't' for signatures below.
+main :: forall t . t ~ R.SpiderTimeline R.Global => IO ()
 main = R.runSpiderHost $ RH.hostApp $ mdo
 
   (counterE, counterT) <- RH.newExternalEvent
@@ -67,6 +70,8 @@ main = R.runSpiderHost $ RH.hostApp $ mdo
   RH.performPostBuild_ $ do
     pure $ RH.infoQuit $ pure finE
 
+  startE <- R.headE counterE
+
   let directionEvent = R.fforMaybe eventE $ (=<<) $ \case
         V.EvKey V.KUp         [] -> Just North
         V.EvKey V.KDown       [] -> Just South
@@ -78,6 +83,9 @@ main = R.runSpiderHost $ RH.hostApp $ mdo
         V.EvKey (V.KChar 'h') [] -> Just West
         _                        -> Nothing
 
+  pause :: R.Behavior t Bool <- R.hold True
+    $ R.mergeWith (||) [restartEvent $> True, directionEvent $> False]
+
   let restartEvent = R.fforMaybe eventE $ (=<<) $ \case
         V.EvKey (V.KChar 'r') [] -> Just ()
         _                        -> Nothing
@@ -85,8 +93,9 @@ main = R.runSpiderHost $ RH.hostApp $ mdo
   let gameChangeEvent = R.mergeWith
         (>=>)
         [ directionEvent <&> \dir g -> pure (turn dir g)
-        , counterE <&> \() g -> liftIO $ step g
+        , R.gate (not <$> pause) counterE <&> \() g -> liftIO $ step g
         , restartEvent <&> \() _ -> liftIO initGame
+        , startE <&> \() g -> pure g -- ensures we render the initial screen
         ]
 
   gamestateDyn <- do
