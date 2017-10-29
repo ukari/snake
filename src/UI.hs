@@ -107,7 +107,7 @@ main = R.runSpiderHost $ RH.hostApp $ mdo
     $ R.mergeWith (||) [restartEvent $> True, directionEvent $> False]
 
   dead :: R.Dynamic t Bool <- R.holdDyn False $ R.leftmost
-    [ R.tag (snakeDiesOnMove <$> R.current nextDirDyn <*> R.current snakeDyn)
+    [ R.tag (snakeDiesOnMove <$> R.current nextHeadDyn <*> R.current snakeDyn)
             counterE
     , restartEvent $> False
     ]
@@ -118,13 +118,14 @@ main = R.runSpiderHost $ RH.hostApp $ mdo
         (R.tagPromptlyDyn dead counterE) -- need promptly to prevent tick
                                          -- if dead in the same instant.
 
-  lastDirDyn <- R.holdDyn NoDir
+  lastDirDyn :: R.Dynamic t Direction <- R.holdDyn NoDir
     $ R.leftmost [restartEvent $> NoDir, R.tag (R.current nextDirDyn) tickE]
-  nextDirDyn <-
+  nextDirDyn :: R.Dynamic t Direction <-
     R.holdDyn NoDir $ R.gate (not <$> R.current dead) $ R.attachWithMaybe
       turnDir
       (R.current lastDirDyn)
       directionEvent
+  let nextHeadDyn = calcNextHead <$> nextDirDyn <*> snakeDyn
 
   let genNewFoodM fs = R.sample (R.current snakeDyn) <&> genNewFood fs
       genNewFood fs snake = dropWhile (`elem`snake) fs
@@ -152,8 +153,8 @@ main = R.runSpiderHost $ RH.hostApp $ mdo
         (.)
         [ R.attachWith
           id
-          (   (\nextDir food () snake -> eatOrMove nextDir food snake)
-          <$> R.current nextDirDyn
+          (   (\nextHead food () snake -> eatOrMove nextHead food snake)
+          <$> R.current nextHeadDyn
           <*> R.current foodDyn
           )
           tickE
