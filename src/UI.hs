@@ -1,12 +1,18 @@
 {-# LANGUAGE OverloadedStrings #-}
-module UI where
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE RecursiveDo #-}
+module UI (main) where
 
-import Control.Monad (forever, void)
+import Control.Monad (forever, void, (>=>))
 import Control.Monad.IO.Class (liftIO)
 import Control.Concurrent (threadDelay, forkIO)
 import Data.Maybe (fromMaybe)
 
 import Snake
+
+import qualified Reflex as R
+import qualified Reflex.Host.App as RH
 
 import Brick
   ( App(..), AttrMap, BrickEvent(..), EventM, Next, Widget
@@ -19,6 +25,7 @@ import Brick
   , attrMap, withAttr, emptyWidget, AttrName, on, fg
   , (<+>)
   )
+import Brick.ReflexMain (brickWrapper)
 import Brick.BChan (newBChan, writeBChan)
 import qualified Brick.Widgets.Border as B
 import qualified Brick.Widgets.Border.Style as BS
@@ -31,11 +38,6 @@ import Lens.Micro ((^.))
 
 -- Types
 
--- | Ticks mark passing of time
---
--- This is our custom event that will be constantly fed into the app.
-data Tick = Tick
-
 -- | Named resources
 --
 -- Not currently used, but will be easier to refactor
@@ -44,79 +46,97 @@ type Name = ()
 
 data Cell = Snake | Food | Empty
 
--- App definition
-
-app :: App Game Tick Name
-app = App { appDraw = drawUI
-          , appChooseCursor = neverShowCursor
-          , appHandleEvent = handleEvent
-          , appStartEvent = return
-          , appAttrMap = const theMap
-          }
+(<&>) :: Functor f => f a -> (a -> b) -> f b
+(<&>) = flip fmap
 
 main :: IO ()
-main = do
-  chan <- newBChan 10
-  _ <- forkIO $ forever $ do
-    writeBChan chan Tick
-    threadDelay 100000 -- decides how fast your game moves
-  g <- initGame
-  void $ customMain (V.mkVty V.defaultConfig) (Just chan) app g
+main = R.runSpiderHost $ RH.hostApp $ mdo
 
--- Handling events
+  (counterE, counterT) <- RH.newExternalEvent
+  _                    <- RH.performPostBuild $ do
+    void $ liftIO $ forkIO $ forever $ do
+      _ <- counterT ()
+      threadDelay 100000 -- decides how fast your game moves
 
-handleEvent :: Game -> BrickEvent Name Tick -> EventM Name (Next Game)
-handleEvent g (AppEvent Tick)                       = liftIO (step g) >>= continue
-handleEvent g (VtyEvent (V.EvKey V.KUp []))         = continue $ turn North g
-handleEvent g (VtyEvent (V.EvKey V.KDown []))       = continue $ turn South g
-handleEvent g (VtyEvent (V.EvKey V.KRight []))      = continue $ turn East g
-handleEvent g (VtyEvent (V.EvKey V.KLeft []))       = continue $ turn West g
-handleEvent g (VtyEvent (V.EvKey (V.KChar 'k') [])) = continue $ turn North g
-handleEvent g (VtyEvent (V.EvKey (V.KChar 'j') [])) = continue $ turn South g
-handleEvent g (VtyEvent (V.EvKey (V.KChar 'l') [])) = continue $ turn East g
-handleEvent g (VtyEvent (V.EvKey (V.KChar 'h') [])) = continue $ turn West g
-handleEvent _ (VtyEvent (V.EvKey (V.KChar 'r') [])) = liftIO (initGame) >>= continue
-handleEvent g (VtyEvent (V.EvKey (V.KChar 'q') [])) = halt g
-handleEvent g (VtyEvent (V.EvKey V.KEsc []))        = halt g
-handleEvent g _                                     = continue g
+  (eventE, finE, _suspendSetupF) <- brickWrapper shouldHaltE
+                                                 widgetsDyn
+                                                 cursorDyn
+                                                 (pure theMap)
+
+  -- tell ReflexHost to quit once the brickWrapper has shut down.
+  RH.performPostBuild_ $ do
+    pure $ RH.infoQuit $ pure finE
+
+  let directionEvent = R.fforMaybe eventE $ (=<<) $ \case
+        V.EvKey V.KUp         [] -> Just North
+        V.EvKey V.KDown       [] -> Just South
+        V.EvKey V.KRight      [] -> Just East
+        V.EvKey V.KLeft       [] -> Just West
+        V.EvKey (V.KChar 'k') [] -> Just North
+        V.EvKey (V.KChar 'j') [] -> Just South
+        V.EvKey (V.KChar 'l') [] -> Just East
+        V.EvKey (V.KChar 'h') [] -> Just West
+        _                        -> Nothing
+
+  let restartEvent = R.fforMaybe eventE $ (=<<) $ \case
+        V.EvKey (V.KChar 'r') [] -> Just ()
+        _                        -> Nothing
+
+  let gameChangeEvent = R.mergeWith
+        (>=>)
+        [ directionEvent <&> \dir g -> pure (turn dir g)
+        , counterE <&> \() g -> liftIO $ step g
+        , restartEvent <&> \() _ -> liftIO initGame
+        ]
+
+  gamestateDyn <- do
+    initGameVal <- liftIO $ initGame
+    R.foldDynM id initGameVal gameChangeEvent
+
+  let widgetsDyn = drawUI <$> gamestateDyn
+
+  let shouldHaltE = R.fforMaybe eventE $ (=<<) $ \case
+        V.EvKey V.KEsc        [] -> Just ()
+        V.EvKey (V.KChar 'q') [] -> Just ()
+        _                        -> Nothing
+
+  let cursorDyn = pure $ const Nothing -- never show cursor
+
+  pure ()
 
 -- Drawing
 
 drawUI :: Game -> [Widget Name]
-drawUI g =
-  [ C.center $ padRight (Pad 2) (drawStats g) <+> drawGrid g ]
+drawUI g = [C.center $ padRight (Pad 2) (drawStats g) <+> drawGrid g]
 
 drawStats :: Game -> Widget Name
 drawStats g = hLimit 11
-  $ vBox [ drawScore (g ^. score)
-         , padTop (Pad 2) $ drawGameOver (g ^. dead)
-         ]
+  $ vBox [drawScore (g ^. score), padTop (Pad 2) $ drawGameOver (g ^. dead)]
 
 drawScore :: Int -> Widget Name
-drawScore n = withBorderStyle BS.unicodeBold
-  $ B.borderWithLabel (str "Score")
-  $ C.hCenter
-  $ padAll 1
-  $ str $ show n
+drawScore n =
+  withBorderStyle BS.unicodeBold
+    $ B.borderWithLabel (str "Score")
+    $ C.hCenter
+    $ padAll 1
+    $ str
+    $ show n
 
 drawGameOver :: Bool -> Widget Name
-drawGameOver isDead =
-  if isDead
-     then withAttr gameOverAttr $ C.hCenter $ str "GAME OVER"
-     else emptyWidget
+drawGameOver isDead = if isDead
+  then withAttr gameOverAttr $ C.hCenter $ str "GAME OVER"
+  else emptyWidget
 
 drawGrid :: Game -> Widget Name
-drawGrid g = withBorderStyle BS.unicodeBold
-  $ B.borderWithLabel (str "Snake")
-  $ vBox rows
-  where
-    rows         = [hBox $ cellsInRow r | r <- [height,height-1..1]]
-    cellsInRow y = [drawCoord (V2 x y) | x <- [1..width]]
-    drawCoord    = drawCell . cellAt
-    cellAt c
-      | c `elem` g ^. snake = Snake
-      | c == g ^. food      = Food
-      | otherwise           = Empty
+drawGrid g =
+  withBorderStyle BS.unicodeBold $ B.borderWithLabel (str "Snake") $ vBox rows
+ where
+  rows = [ hBox $ cellsInRow r | r <- [height, height - 1 .. 1] ]
+  cellsInRow y = [ drawCoord (V2 x y) | x <- [1 .. width] ]
+  drawCoord = drawCell . cellAt
+  cellAt c | c `elem` g ^. snake = Snake
+           | c == g ^. food      = Food
+           | otherwise           = Empty
 
 drawCell :: Cell -> Widget Name
 drawCell Snake = withAttr snakeAttr cw
@@ -127,9 +147,10 @@ cw :: Widget Name
 cw = str "  "
 
 theMap :: AttrMap
-theMap = attrMap V.defAttr
-  [ (snakeAttr, V.blue `on` V.blue)
-  , (foodAttr, V.red `on` V.red)
+theMap = attrMap
+  V.defAttr
+  [ (snakeAttr   , V.blue `on` V.blue)
+  , (foodAttr    , V.red `on` V.red)
   , (gameOverAttr, fg V.red `V.withStyle` V.bold)
   ]
 
