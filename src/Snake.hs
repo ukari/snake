@@ -1,21 +1,41 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE MonadComprehensions #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE RecursiveDo #-}
 
 module Snake where
 
 import Control.Applicative ((<|>))
 import Control.Monad (guard)
 import Data.Maybe (fromMaybe)
+import Data.Functor (($>))
+import Control.Monad.IO.Class (MonadIO, liftIO)
+import Control.Monad.Fix (MonadFix)
 
 import Data.Sequence (Seq, ViewL(..), ViewR(..), (<|))
 import qualified Data.Sequence as S
 import Lens.Micro.TH (makeLenses)
 import Lens.Micro ((&), (.~), (%~), (^.))
 import Linear.V2 (V2(..), _x, _y)
-import System.Random (randomRIO)
+import System.Random (newStdGen, randomRs)
+
+import qualified Reflex as R
+
+-- General Utility
+
+(<&>) :: Functor f => f a -> (a -> b) -> f b
+(<&>) = flip fmap
 
 -- Types
+
+data OutputState = OutputState
+  { _out_dead :: Bool
+  , _out_score :: Int
+  , _out_snake :: Seq Coord
+  , _out_food :: Coord
+  }
 
 type Coord = V2 Int
 type Snake = Seq Coord
@@ -88,3 +108,102 @@ outOfBounds c = any (<1) c || c ^. _x > width || c ^. _y > height
 initialSnake :: Snake
 initialSnake = S.singleton (V2 10 10)
 
+
+-- Game core network
+
+gameNetwork
+  :: forall t m
+   . (t ~ R.SpiderTimeline R.Global, MonadFix m, R.MonadHold t m, MonadIO m)
+  => R.Event t ()
+  -> R.Event t Direction
+  -> R.Event t ()
+  -> m (R.Dynamic t OutputState)
+gameNetwork restartEvent directionEvent tickEvent = mdo
+  -- the state changes affect each other, so we use recursive do here.
+
+  startEvent                 <- R.headE tickEvent
+
+  pause :: R.Behavior t Bool <- R.hold True
+    $ R.mergeWith (||) [restartEvent $> True, directionEvent $> False]
+
+  dead :: R.Dynamic t Bool <- R.holdDyn False $ R.leftmost
+    [ restartEvent $> False
+    , R.tag (snakeDiesOnMove <$> R.current nextHeadDyn <*> R.current snakeDyn)
+            tickEvent
+    ]
+
+  let moveEvent = R.attachWithMaybe
+        (\paused dying -> [ () | not (dying || paused) ])
+        pause
+        (R.tagPromptlyDyn dead tickEvent) -- need promptly to prevent tick
+                                         -- if dead in the same instant.
+
+  snakeDyn :: R.Dynamic t (Seq Coord) <- snakeNetwork startEvent
+                                                      moveEvent
+                                                      (R.current nextHeadDyn)
+                                                      (R.current foodDyn)
+
+  nextHeadDyn :: R.Dynamic t (Maybe Coord) <- snakeHeadNetwork moveEvent
+                                                               dead
+                                                               snakeDyn
+
+  foodDyn :: R.Dynamic t Coord <- foodNetwork startEvent snakeDyn
+
+  scoreDyn :: R.Dynamic t Int  <- scoreNetwork (R.current foodDyn) snakeDyn
+
+  pure $ OutputState <$> dead <*> scoreDyn <*> snakeDyn <*> foodDyn
+ where
+
+  foodNetwork startEvent snakeDyn = do
+    let genNewFoodM fs = R.sample (R.current snakeDyn) <&> genNewFood fs
+        genNewFood fs snake = dropWhile (`elem`snake) fs
+    let foodChange = R.leftmost
+          [ startEvent $> \fs -> genNewFoodM fs
+          , restartEvent $> \fs -> genNewFoodM fs
+          , R.updated snakeDyn <&> \snake fs -> pure (genNewFood fs snake)
+          ]
+    infiniteFoodSupply <- liftIO
+      [ zipWith V2 x y
+      | x <- newStdGen <&> randomRs (1, width)
+      , y <- newStdGen <&> randomRs (1, height)
+      ]
+    allTheFood :: R.Dynamic t [Coord] <- R.foldDynM id
+                                                    infiniteFoodSupply
+                                                    foodChange
+    pure $ head <$> allTheFood
+
+  snakeHeadNetwork moveEvent dead snakeDyn = mdo
+    lastDirDyn :: R.Dynamic t Direction <- R.holdDyn NoDir $ R.leftmost
+      [restartEvent $> NoDir, R.tag (R.current nextDirDyn) moveEvent]
+    nextDirDyn :: R.Dynamic t Direction <-
+      R.holdDyn NoDir $ R.gate (not <$> R.current dead) $ R.attachWithMaybe
+        turnDir
+        (R.current lastDirDyn)
+        directionEvent
+    pure $ calcNextHead <$> nextDirDyn <*> snakeDyn
+
+  scoreNetwork foodB snakeDyn = do
+    let scoreChange = R.leftmost
+          [ restartEvent $> const 0
+          , R.attachWith
+            (\food g -> if getSnakeHead g == food then (+10) else id)
+            foodB
+            (R.updated snakeDyn)
+          ]
+    R.foldDyn id 0 scoreChange
+
+  snakeNetwork startEvent moveEvent nextHeadB foodB = do
+    let snakeChangeE :: R.Event t (Snake -> Snake) = R.mergeWith
+          (.)
+          [ R.attachWith
+            id
+            (   (\nextHead food () snake -> eatOrMove nextHead food snake)
+            <$> nextHeadB
+            <*> foodB
+            )
+            moveEvent
+          , restartEvent <&> \() _ -> initialSnake
+          , startEvent $> id -- ensures we render the initial screen
+          ]
+
+    R.foldDyn id initialSnake snakeChangeE

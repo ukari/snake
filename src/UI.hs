@@ -4,6 +4,7 @@
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE MonadComprehensions #-}
+
 module UI (main) where
 
 import Control.Monad (forever, void, (>=>))
@@ -51,17 +52,14 @@ type Name = ()
 
 data Cell = Snake | Food | Empty
 
-(<&>) :: Functor f => f a -> (a -> b) -> f b
-(<&>) = flip fmap
-
 -- this forall is just a trick to "declare" 't' for signatures below.
 main :: forall t . t ~ R.SpiderTimeline R.Global => IO ()
 main = R.runSpiderHost $ RH.hostApp $ mdo
 
-  (counterE, counterT) <- RH.newExternalEvent
+  (timerEvent, timerT) <- RH.newExternalEvent
   _                    <- RH.performPostBuild $ do
     void $ liftIO $ forkIO $ forever $ do
-      _ <- counterT ()
+      _ <- timerT ()
       threadDelay 100000 -- decides how fast your game moves
 
   (eventE, finE, _suspendSetupF) <- brickWrapper shouldHaltE
@@ -72,8 +70,6 @@ main = R.runSpiderHost $ RH.hostApp $ mdo
   -- tell ReflexHost to quit once the brickWrapper has shut down.
   RH.performPostBuild_ $ do
     pure $ RH.infoQuit $ pure finE
-
-  startE <- R.headE counterE
 
   let directionEvent = R.fforMaybe eventE $ (=<<) $ \case
         V.EvKey V.KUp         [] -> Just North
@@ -97,86 +93,13 @@ main = R.runSpiderHost $ RH.hostApp $ mdo
         V.EvKey (V.KChar 'q') [] -> Just ()
         _                        -> Nothing
 
-  infiniteFoodSupply <- liftIO
-    [ zipWith V2 x y
-    | x <- newStdGen <&> randomRs (1, width)
-    , y <- newStdGen <&> randomRs (1, height)
-    ]
+  outputDyn <- gameNetwork restartEvent directionEvent timerEvent
 
-  pause :: R.Behavior t Bool <- R.hold True
-    $ R.mergeWith (||) [restartEvent $> True, directionEvent $> False]
-
-  dead :: R.Dynamic t Bool <- R.holdDyn False $ R.leftmost
-    [ R.tag (snakeDiesOnMove <$> R.current nextHeadDyn <*> R.current snakeDyn)
-            counterE
-    , restartEvent $> False
-    ]
-
-  let tickE = R.attachWithMaybe
-        (\paused dying -> [ () | not (dying || paused) ])
-        pause
-        (R.tagPromptlyDyn dead counterE) -- need promptly to prevent tick
-                                         -- if dead in the same instant.
-
-  lastDirDyn :: R.Dynamic t Direction <- R.holdDyn NoDir
-    $ R.leftmost [restartEvent $> NoDir, R.tag (R.current nextDirDyn) tickE]
-  nextDirDyn :: R.Dynamic t Direction <-
-    R.holdDyn NoDir $ R.gate (not <$> R.current dead) $ R.attachWithMaybe
-      turnDir
-      (R.current lastDirDyn)
-      directionEvent
-  let nextHeadDyn = calcNextHead <$> nextDirDyn <*> snakeDyn
-
-  let genNewFoodM fs = R.sample (R.current snakeDyn) <&> genNewFood fs
-      genNewFood fs snake = dropWhile (`elem`snake) fs
-  let foodChange = R.leftmost
-        [ startE $> \fs -> genNewFoodM fs
-        , restartEvent $> \fs -> genNewFoodM fs
-        , R.updated snakeDyn <&> \snake fs -> pure (genNewFood fs snake)
-        ]
-  allTheFood :: R.Dynamic t [Coord] <- R.foldDynM id
-                                                  infiniteFoodSupply
-                                                  foodChange
-
-  let foodDyn = head <$> allTheFood
-
-  let scoreChange = R.leftmost
-        [ restartEvent $> const 0
-        , R.attachWith
-          (\food g -> if getSnakeHead g == food then (+10) else id)
-          (R.current foodDyn)
-          (R.updated snakeDyn)
-        ]
-  scoreDyn :: R.Dynamic t Int <- R.foldDyn id 0 scoreChange
-
-  let snakeChangeE :: R.Event t (Snake -> Snake) = R.mergeWith
-        (.)
-        [ R.attachWith
-          id
-          (   (\nextHead food () snake -> eatOrMove nextHead food snake)
-          <$> R.current nextHeadDyn
-          <*> R.current foodDyn
-          )
-          tickE
-        , restartEvent <&> \() _ -> initialSnake
-        , startE $> id -- ensures we render the initial screen
-        ]
-
-  snakeDyn <- R.foldDyn id initialSnake snakeChangeE
-
-  let widgetsDyn =
-        drawUI <$> (OutputState <$> dead <*> scoreDyn <*> snakeDyn <*> foodDyn)
+  let widgetsDyn = drawUI <$> outputDyn
 
   pure ()
 
 -- Drawing
-
-data OutputState = OutputState
-  { _out_dead :: Bool
-  , _out_score :: Int
-  , _out_snake :: Seq Coord
-  , _out_food :: Coord
-  }
 
 drawUI :: OutputState -> [Widget Name]
 drawUI s = [C.center $ padRight (Pad 2) (drawStats s) <+> drawGrid s]
