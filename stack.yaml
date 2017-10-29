@@ -37,9 +37,31 @@ resolver: lts-8.20
 # will not be run. This is useful for tweaking upstream packages.
 packages:
 - '.'
+- location:
+    git: https://github.com/reflex-frp/reflex
+    commit: 36db894180d015fdd032d7d3a338e0b5ac9df4b4
+  extra-dep: true
+- location:
+    git: https://github.com/lspitzner/reflex-host
+    commit: 0f31b27e62f9c237c990bb83b67536d50e84c025
+  extra-dep: true
+- location:
+    git: https://github.com/lspitzner/bricki
+    commit: 2098d402d9426b6b099ed0beb384e082c28c0327
+  extra-dep: true
+- location:
+    git: https://github.com/lspitzner/bricki-reflex
+    commit: b97ccef05f10bfbdac5ff56e1167af9ef62c99b1
+  extra-dep: true
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
-extra-deps: []
+
+extra-deps:
+- data-clist-0.1.2.0
+- prim-uniq-0.1.0.1
+- ref-tf-0.4.0.1
+- word-wrap-0.4.1
+- vty-5.18.1
 
 # Override default flag values for local packages and extra-deps
 flags: {}
